@@ -1,6 +1,6 @@
 import json
 import logging
-from fastapi import APIRouter, Request, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Request, HTTPException
 from app.core.redis_client import get_redis
 from app.services.agiso import AgisoClient, PROCESSED_KEY_PREFIX, PROCESSED_TTL
 from app.tasks.worker import QUEUE_NAME
@@ -11,30 +11,44 @@ agiso = AgisoClient()
 
 
 @router.post("/webhook/agiso")
-async def agiso_webhook(request: Request, background_tasks: BackgroundTasks):
-    """接收阿奇索订单推送"""
-    body = await request.json()
-    logger.debug("Webhook received: %s", body)
+async def agiso_webhook(request: Request):
+    """接收阿奇索订单推送（form-encoded body，sign 在 query string）"""
+    content_type = request.headers.get("content-type", "")
 
-    # 签名验证
-    received_sign = request.headers.get("X-Sign", body.pop("sign", ""))
-    if received_sign and not agiso.verify_webhook_sign(body, received_sign):
+    # 阿奇索推送为 form-encoded，也兼容 JSON
+    if "application/json" in content_type:
+        body = await request.json()
+    else:
+        form = await request.form()
+        body = dict(form)
+
+    logger.info("Webhook received body: %s query: %s", body, dict(request.query_params))
+
+    # sign 优先从 query string 取，其次从 body 取
+    received_sign = (
+        request.query_params.get("sign")
+        or body.pop("sign", "")
+        or request.headers.get("X-Sign", "")
+    )
+
+    # 签名验证（有 sign 才验，调试阶段可注释掉）
+    if received_sign and not agiso.verify_webhook_sign(dict(body), received_sign):
+        logger.warning("Invalid sign: received=%s body=%s", received_sign, body)
         raise HTTPException(status_code=401, detail="Invalid signature")
 
-    tid = str(body.get("tid") or body.get("orderId") or "")
+    tid = str(body.get("tid") or body.get("orderId") or body.get("oid") or "")
     if not tid:
+        logger.warning("Webhook missing tid, body=%s", body)
         raise HTTPException(status_code=400, detail="Missing tid")
 
-    status = body.get("status", "")
-    # 只处理等待卖家发货状态
-    if status and status != "WAIT_SELLER_SEND_GOODS":
+    status = str(body.get("status") or body.get("tradeStatus") or "")
+    if status and status not in ("WAIT_SELLER_SEND_GOODS", ""):
+        logger.info("Order %s status=%s ignored", tid, status)
         return {"code": 0, "msg": "ignored"}
 
-    token = body.get("token", "")
+    token = str(body.get("token") or "")
 
     redis = await get_redis()
-
-    # 幂等：已处理的订单不重复入队
     processed_key = f"{PROCESSED_KEY_PREFIX}{tid}"
     if await redis.exists(processed_key):
         logger.info("Order %s already processed, skip", tid)

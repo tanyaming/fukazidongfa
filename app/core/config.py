@@ -6,7 +6,7 @@ class Settings(BaseSettings):
     # 阿奇索
     agiso_app_id: str
     agiso_app_secret: str
-    agiso_base_url: str = "https://alds.agiso.com"
+    agiso_base_url: str = "https://gw-api.agiso.com"
 
     # 简道云
     jdy_api_key: str
