@@ -55,9 +55,11 @@ async def agiso_webhook(request: Request):
         raise HTTPException(status_code=400, detail="Missing tid")
 
     status = str(body.get("Status") or body.get("status") or "")
-    if status and status != "WAIT_SELLER_SEND_GOODS":
-        logger.info("Order %s status=%s ignored", tid, status)
-        return {"code": 0, "msg": "ignored"}
+    # TODO: 临时放行所有状态用于测试，正式上线恢复
+    # if status and status != "WAIT_SELLER_SEND_GOODS":
+    #     logger.info("Order %s status=%s ignored", tid, status)
+    #     return {"code": 0, "msg": "ignored"}
+    logger.info("Order %s status=%s accepted (status check disabled)", tid, status)
 
     # 推流中没有 token，需要后续通过平台信息获取
     # 暂时把 Platform + PlatformUserId 存下来
