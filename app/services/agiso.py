@@ -13,11 +13,24 @@ PROCESSED_KEY_PREFIX = "processed:order:"
 PROCESSED_TTL = 7 * 24 * 3600  # 7天
 
 
-def _sign(params: dict, app_secret: str) -> str:
-    """新版签名：appSecret + key1value1 + key2value2 + ... + appSecret → MD5 小写"""
+def _sign_v2(params: dict, app_secret: str) -> str:
+    """新版 API 签名：appSecret + sortedKV + appSecret → MD5 小写"""
     sorted_str = "".join(f"{k}{v}" for k, v in sorted(params.items()))
     raw = f"{app_secret}{sorted_str}{app_secret}"
     return hashlib.md5(raw.encode()).hexdigest().lower()
+
+
+def _sign_v1(params: dict, app_secret: str) -> str:
+    """老版签名：sortedKV + appSecret → MD5 大写（用于 webhook 推送验证）"""
+    sorted_str = "".join(f"{k}{v}" for k, v in sorted(params.items()))
+    raw = f"{sorted_str}{app_secret}"
+    return hashlib.md5(raw.encode()).hexdigest().upper()
+
+
+def sign_webhook(params: dict, received_sign: str, app_secret: str) -> bool:
+    """验证 Webhook 推送签名（老版 v1）"""
+    expected = _sign_v1(params, app_secret)
+    return expected.upper() == received_sign.upper()
 
 
 class AgisoClient:
@@ -26,13 +39,13 @@ class AgisoClient:
         self.base_url = settings.agiso_base_url
 
     def _build_request(self, url_path: str, params: dict, access_token: str) -> tuple[str, dict, str]:
-        """构建请求：返回 (url, headers, body)"""
+        """构建新版 API 请求：返回 (url, headers, body)"""
         ts = str(int(time.time()))
         body_params = {
             **params,
             "timestamp": ts,
         }
-        body_params["sign"] = _sign(body_params, self.app_secret)
+        body_params["sign"] = _sign_v2(body_params, self.app_secret)
         body = urlencode(body_params)
         headers = {
             "Authorization": f"Bearer {access_token}",
@@ -44,6 +57,8 @@ class AgisoClient:
 
     async def get_order_detail(self, access_token: str, tid: str) -> dict:
         """获取订单详情"""
+        if not access_token:
+            raise ValueError("access_token is required")
         url, headers, body = self._build_request("/Order/Detail", {"tid": tid}, access_token)
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(url, content=body, headers=headers)
@@ -57,6 +72,8 @@ class AgisoClient:
         page_no: int = 1, page_size: int = 100,
     ) -> dict:
         """拉取订单列表"""
+        if not access_token:
+            raise ValueError("access_token is required")
         url, headers, body = self._build_request("/Order/List", {
             "status": status,
             "pageNo": str(page_no),
@@ -71,10 +88,10 @@ class AgisoClient:
 
     async def ship_order(self, access_token: str, tid: str, delivery_content: str) -> dict:
         """虚拟发货"""
+        if not access_token:
+            raise ValueError("access_token is required")
         url, headers, body = self._build_request("/Order/DummySend", {
             "tid": tid,
-            "out_sid": tid,
-            "company_code": "VIRTUAL",
             "remark": delivery_content,
         }, access_token)
         async with httpx.AsyncClient(timeout=30) as client:
@@ -83,8 +100,3 @@ class AgisoClient:
             data = resp.json()
             logger.info("agiso ship_order tid=%s result: %s", tid, data)
             return data
-
-    def verify_webhook_sign(self, payload: dict, received_sign: str) -> bool:
-        """Webhook 推送签名验证（老版格式兼容，如有需要后续更新）"""
-        expected = _sign(payload, self.app_secret)
-        return expected == received_sign.lower()

@@ -2,7 +2,7 @@ import json
 import logging
 from fastapi import APIRouter, Request, HTTPException
 from app.core.redis_client import get_redis
-from app.services.agiso import AgisoClient, PROCESSED_KEY_PREFIX, PROCESSED_TTL
+from app.services.agiso import AgisoClient, PROCESSED_KEY_PREFIX, PROCESSED_TTL, sign_webhook
 from app.tasks.worker import QUEUE_NAME
 
 logger = logging.getLogger(__name__)
@@ -12,41 +12,57 @@ agiso = AgisoClient()
 
 @router.post("/webhook/agiso")
 async def agiso_webhook(request: Request):
-    """接收阿奇索订单推送（form-encoded body，sign 在 query string）"""
+    """接收阿奇索订单推送"""
     content_type = request.headers.get("content-type", "")
 
-    # 阿奇索推送为 form-encoded，也兼容 JSON
+    # 解析 form-encoded body
     if "application/json" in content_type:
-        body = await request.json()
+        raw_body = await request.json()
     else:
         form = await request.form()
-        body = dict(form)
+        raw_body = dict(form)
 
-    logger.info("Webhook received body: %s query: %s", body, dict(request.query_params))
+    query_params = dict(request.query_params)
+    logger.info("Webhook received body: %s query: %s", raw_body, query_params)
 
-    # sign 优先从 query string 取，其次从 body 取
-    received_sign = (
-        request.query_params.get("sign")
-        or body.pop("sign", "")
-        or request.headers.get("X-Sign", "")
-    )
+    # 阿奇索推送格式：body 中有 json 字段包含订单数据
+    json_str = raw_body.get("json", "")
+    if json_str:
+        try:
+            body = json.loads(json_str)
+        except json.JSONDecodeError:
+            logger.warning("Failed to parse json field: %s", json_str)
+            raise HTTPException(status_code=400, detail="Invalid json")
+    else:
+        body = raw_body
 
-    # 签名验证（有 sign 才验，调试阶段可注释掉）
-    if received_sign and not agiso.verify_webhook_sign(dict(body), received_sign):
-        logger.warning("Invalid sign: received=%s body=%s", received_sign, body)
+    # 签名验证：sign 在 query string 中
+    received_sign = query_params.get("sign", "") or raw_body.get("sign", "")
+    # 签名参与计算时用 query 参数（不含 sign）+ body 中的 json 字符串
+    sign_payload = {**query_params, "json": raw_body.get("json", "")}
+    sign_payload.pop("sign", None)
+    sign_payload.pop("aopic", None)  # aopic 不参与签名
+
+    if received_sign and not sign_webhook(sign_payload, received_sign, agiso.app_secret):
+        logger.warning("Invalid sign: received=%s", received_sign)
         raise HTTPException(status_code=401, detail="Invalid signature")
 
-    tid = str(body.get("tid") or body.get("orderId") or body.get("oid") or "")
+    # 提取订单信息（大写驼峰字段）
+    tid = str(body.get("Tid") or body.get("tid") or "")
     if not tid:
         logger.warning("Webhook missing tid, body=%s", body)
         raise HTTPException(status_code=400, detail="Missing tid")
 
-    status = str(body.get("status") or body.get("tradeStatus") or "")
-    if status and status not in ("WAIT_SELLER_SEND_GOODS", ""):
+    status = str(body.get("Status") or body.get("status") or "")
+    if status and status != "WAIT_SELLER_SEND_GOODS":
         logger.info("Order %s status=%s ignored", tid, status)
         return {"code": 0, "msg": "ignored"}
 
-    token = str(body.get("token") or "")
+    # 推流中没有 token，需要后续通过平台信息获取
+    # 暂时把 Platform + PlatformUserId 存下来
+    token = str(body.get("Token") or body.get("token") or "")
+    platform = body.get("Platform", "")
+    platform_user_id = body.get("PlatformUserId", "")
 
     redis = await get_redis()
     processed_key = f"{PROCESSED_KEY_PREFIX}{tid}"
@@ -55,7 +71,12 @@ async def agiso_webhook(request: Request):
         return {"code": 0, "msg": "already processed"}
 
     await redis.set(processed_key, "1", ex=PROCESSED_TTL)
-    job = json.dumps({"tid": tid, "token": token})
+    job = json.dumps({
+        "tid": tid,
+        "token": token,
+        "platform": platform,
+        "platform_user_id": platform_user_id,
+    })
     await redis.lpush(QUEUE_NAME, job)
     logger.info("Order %s enqueued", tid)
 
