@@ -98,25 +98,7 @@ async def process_order(
     await db.commit()
 
     try:
-        # 1. 拉取订单详情，获取商品 SKU 列表
-        detail_resp = await agiso.get_order_detail(effective_token, tid)
-        order_items = _parse_order_items(detail_resp)
-        order = AgisoOrder(tid=tid, orders=order_items, raw=detail_resp)
-
-        # 2. 判断是否副卡商品
-        if not await is_fuka_order(order, db):
-            logger.info("Order %s is not a fuka order, skip", tid)
-            record.status = ShipmentStatus.shipped  # 非副卡订单不需要处理，标记完成跳过
-            record.error_message = "非副卡商品，跳过"
-            await db.commit()
-            return
-
-        # 记录 SKU（取第一个匹配的商品）
-        if order_items:
-            record.product_sku = order_items[0].outer_sku_id or order_items[0].sku_id
-            await db.commit()
-
-        # 3. 获取可用副卡
+        # 1. 获取可用副卡
         fuka = await jdy.get_available_fuka()
         if fuka is None:
             record.status = ShipmentStatus.pending_manual
@@ -125,20 +107,20 @@ async def process_order(
             await alert_no_fuka(tid)
             return
 
-        # 4. 调阿奇索发货
+        # 2. 调阿奇索发货
         delivery_msg = f"您好，您购买的副卡链接如下，请查收：\n{fuka.link}"
         ship_result = await agiso.ship_order(effective_token, tid, delivery_msg)
 
         if ship_result.get("code") not in (None, 0, "0", "success", 200):
             raise RuntimeError(f"阿奇索发货失败: {ship_result}")
 
-        # 5. 更新简道云状态（失败由补偿任务重试）
+        # 3. 更新简道云状态（失败由补偿任务重试）
         try:
             await jdy.mark_fuka_used(fuka.record_id, tid)
         except Exception as e:
             logger.error("JDY update failed for order %s, will retry: %s", tid, e)
 
-        # 6. 更新本地发货记录
+        # 4. 更新本地发货记录
         record.status = ShipmentStatus.shipped
         record.jdy_record_id = fuka.record_id
         record.jdy_content = fuka.raw

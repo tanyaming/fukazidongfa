@@ -60,6 +60,13 @@ async def agiso_webhook(request: Request):
     #     logger.info("Order %s status=%s ignored", tid, status)
     #     return {"code": 0, "msg": "ignored"}
 
+    # 副卡判断：付款金额 > 90 且 <= 105
+    payment = float(body.get("Payment") or 0)
+    is_fuka = 90 < payment <= 105
+    if not is_fuka:
+        logger.info("Order %s payment=%s not in fuka range (90-105), skip", tid, payment)
+        return {"code": 0, "msg": "not_fuka"}
+
     token = str(body.get("Token") or body.get("token") or "")
 
     redis = await get_redis()
