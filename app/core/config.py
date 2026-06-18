@@ -17,8 +17,10 @@ class Settings(BaseSettings):
     jdy_field_expire: str = "_widget_1686468122287"
     jdy_field_link: str = "_widget_1742477595612"
     jdy_field_order_id: str = "_widget_1686468122289"
+    jdy_field_sale_switch: str = "_widget_1717078181282"  # 售卖开关字段 widget ID（填入后生效）
     jdy_status_available: str = "副卡未售"
     jdy_status_used: str = "副卡已售"
+    jdy_status_on_sale: str = "开售"       # 售卖开关「开售」的值
 
     # MySQL
     mysql_host: str = "mysql"
