@@ -7,6 +7,7 @@ class Settings(BaseSettings):
     agiso_app_id: str
     agiso_app_secret: str
     agiso_base_url: str = "https://gw-api.agiso.com"
+    agiso_access_token: str = ""  # 商户授权 token，在阿奇索平台「已授权商户」中查看
 
     # 简道云
     jdy_api_key: str

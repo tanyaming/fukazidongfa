@@ -6,8 +6,10 @@ from app.models.schemas import AgisoOrder, AgisoOrderItem
 from app.services.agiso import AgisoClient
 from app.services.jiandaoyun import JiandaoyunClient
 from app.services.notifier import alert_no_fuka, alert_ship_failed
+from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
+settings = get_settings()
 
 MAX_RETRY = 3
 
@@ -77,8 +79,8 @@ async def process_order(
         record.merchant_token = token
         await db.commit()
 
-    # 取持久化的 token（补偿重试时 job 里 token 为空时用）
-    effective_token = record.merchant_token or token
+    # 取持久化的 token，最后用配置文件里的全局 token 兜底
+    effective_token = record.merchant_token or token or settings.agiso_access_token
 
     if record.status == ShipmentStatus.shipped:
         logger.info("Order %s already shipped, skip", tid)

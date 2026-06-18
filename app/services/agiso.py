@@ -28,9 +28,13 @@ def _sign_v1(params: dict, app_secret: str) -> str:
 
 
 def sign_webhook(params: dict, received_sign: str, app_secret: str) -> bool:
-    """验证 Webhook 推送签名（老版 v1）"""
-    expected = _sign_v1(params, app_secret)
-    return expected.upper() == received_sign.upper()
+    """验证 Webhook 推送签名：appSecret + appId + timestamp + json + appSecret → MD5 大写"""
+    # 阿奇索签名规则：将参与签名的 key 按字母排序后拼接值，前后加 appSecret
+    sign_params = {k: v for k, v in params.items() if k != "sign"}
+    sorted_str = "".join(f"{v}" for k, v in sorted(sign_params.items()))
+    raw = f"{app_secret}{sorted_str}{app_secret}"
+    expected = hashlib.md5(raw.encode()).hexdigest().upper()
+    return expected == received_sign.upper()
 
 
 class AgisoClient:
