@@ -107,25 +107,9 @@ async def process_order(
             await alert_no_fuka(tid)
             return
 
-        # 2. 调阿奇索发货
-        delivery_msg = f"您好，您购买的副卡链接如下，请查收：\n{fuka.link}"
-        ship_result = await agiso.ship_order(effective_token, tid, delivery_msg)
-
-        # 阿奇索响应用 IsSuccess 字段表示成功
-        if not ship_result.get("IsSuccess"):
-            err = ship_result.get("Error_Msg") or str(ship_result)
-            # 发货失败，回滚简道云卡的状态
-            await jdy.rollback_fuka(fuka.record_id)
-            raise RuntimeError(f"阿奇索发货失败: {err}")
-
-        # 3. 更新简道云状态（失败由补偿任务重试）
-        try:
-            await jdy.mark_fuka_used(fuka.record_id)
-        except Exception as e:
-            logger.error("JDY update failed for order %s, will retry: %s", tid, e)
-
-        # 4. 通过淘宝聊天给买家发送副卡链接
         chat_msg = f"您好，您购买的副卡链接如下，请查收：\n{fuka.link}"
+
+        # 2. 先通过淘宝旺旺给买家发送副卡链接
         try:
             send_result = await agiso.send_message(effective_token, tid, chat_msg)
             if not send_result.get("IsSuccess"):
@@ -133,7 +117,19 @@ async def process_order(
         except Exception as e:
             logger.error("agiso send_message tid=%s error: %s", tid, e)
 
-        # 5. 更新本地发货记录
+        # 3. 更新发货状态
+        ship_result = await agiso.ship_order(effective_token, tid, chat_msg)
+        if not ship_result.get("IsSuccess"):
+            err = ship_result.get("Error_Msg") or str(ship_result)
+            await jdy.rollback_fuka(fuka.record_id)
+            raise RuntimeError(f"阿奇索发货失败: {err}")
+
+        # 4. 更新简道云状态
+        try:
+            await jdy.mark_fuka_used(fuka.record_id)
+        except Exception as e:
+            logger.error("JDY update failed for order %s: %s", tid, e)
+
         record.status = ShipmentStatus.shipped
         record.jdy_record_id = fuka.record_id
         record.jdy_content = fuka.raw

@@ -103,12 +103,12 @@ class AgisoClient:
             return data
 
     async def send_message(self, access_token: str, tid: str, content: str) -> dict:
-        """通过淘宝聊天给买家发送消息"""
+        """通过淘宝旺旺给买家发送消息"""
         if not access_token:
             raise ValueError("access_token is required")
-        url, headers, body = self._build_request("/tb/sendTbAppCard", {
+        url, headers, body = self._build_request("/alds/WwMsg/Send", {
             "tid": tid,
-            "content": content,
+            "msg": content,
         }, access_token)
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(url, content=body, headers=headers)
