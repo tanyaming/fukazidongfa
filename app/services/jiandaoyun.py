@@ -85,7 +85,7 @@ class JiandaoyunClient:
         payload = {
             "app_id": self.app_id,
             "entry_id": self.entry_id,
-            "limit": 1,
+            "limit": 10,
             "filter": {
                 "rel": "and",
                 "cond": [
@@ -117,19 +117,23 @@ class JiandaoyunClient:
 
         records = data.get("data", [])
         logger.info("JDY available fuka count: %d", len(records))
-        if not records:
-            return None
 
-        row = records[0]
-        link_field = row.get(settings.jdy_field_link)
-        link = link_field.get("value", "") if isinstance(link_field, dict) else str(link_field or "")
+        # 过滤：链接必须以指定前缀开头才有效
+        valid_prefix = "https://m-sams.walmartmobile.cn/h5"
+        for row in records:
+            link_field = row.get(settings.jdy_field_link)
+            link = link_field.get("value", "") if isinstance(link_field, dict) else str(link_field or "")
+            if link.startswith(valid_prefix):
+                logger.info("JDY matched valid fuka link: %s", link)
+                return JdyRecord(
+                    record_id=row["_id"],
+                    link=link,
+                    expire_time=str(row.get(settings.jdy_field_expire, "")),
+                    raw=row,
+                )
 
-        return JdyRecord(
-            record_id=row["_id"],
-            link=link,
-            expire_time=str(row.get(settings.jdy_field_expire, "")),
-            raw=row,
-        )
+        logger.info("JDY no fuka with valid link prefix found")
+        return None
 
     async def mark_fuka_used(self, record_id: str) -> bool:
         """将副卡状态更新为已售"""
@@ -154,7 +158,6 @@ class JiandaoyunClient:
             "data_id": record_id,
             "data": {
                 settings.jdy_field_status: {"value": settings.jdy_status_available},
-                settings.jdy_field_order_id: {"value": ""},
             },
             "is_start_trigger": False,
         }
