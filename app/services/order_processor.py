@@ -107,7 +107,7 @@ async def process_order(
             await alert_no_fuka(tid)
             return
 
-        chat_msg = f"您好，您购买的副卡链接如下，请查收：\n{fuka.link}"
+        chat_msg = f"您好，您购买的副卡链接如下，建议复制粘贴到微信聊天框中打开。请查收：\n{fuka.link}"
 
         # 2. 先通过淘宝旺旺给买家发送副卡链接
         try:
